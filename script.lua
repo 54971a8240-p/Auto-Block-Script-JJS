@@ -1,8 +1,20 @@
+print("[AutoBlock] Running")
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/NonUI/main/NonUI.lua"))()
+local Non = _G.NonUI or NonUI
+if not Non then print("[AutoBlock] ERROR: NonUI failed to load") return end
+
 local Players   = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer      = Players.LocalPlayer
 local CharactersFolder = Workspace:WaitForChild("Characters")
+
+local COUNTERS = {
+    ["Eye Catching"]  = 0x33,
+    ["Manji Kick"]    = 0x34,
+    ["Head Splitter"] = 0x34,
+}
 
 local BlockAnimations = {}
 local DashAnimations  = {}
@@ -137,46 +149,69 @@ local function flat(v) local f=Vector3.new(v.X,0,v.Z) return f.Magnitude<0.01 an
 local DOT=0.25
 local function isFacing(lr,er) local d=er.Position-lr.Position if Vector3.new(d.X,0,d.Z).Magnitude<0.1 then return true end return flat(lr.CFrame.LookVector):Dot(flat(d))>=DOT end
 
-local isHeld=false
-local blockEnd=0
-local ActiveThreats={}
-local lastChar=nil
+local isHeld          = false
+local blockEnd        = 0
+local ActiveThreats   = {}
+local lastChar        = nil
+local counterCooldown = 0
 
-UI.AddTab("Auto Block", function(tab)
-    local sec = tab:Section("Settings", "Left")
-    sec:Toggle("ab_enabled",  "Enable",     false)
-    sec:Keybind("ab_kb",      0x00,             "toggle")
-    sec:Toggle("ab_melee",    "Block Melee",    true)
-    sec:Toggle("ab_dash",     "Block Dash",     true)
-    sec:SliderInt("ab_range", "Range",          1, 50, 8)
-    sec:SliderFloat("ab_hold","Hold Duration",  0.05, 1.0, 0.4, "%.2f")
-end)
+local state = {
+    blockEnabled   = false,
+    blockMelee     = true,
+    blockDash      = true,
+    blockRange     = 8,
+    blockHold      = 0.4,
+    counterEnabled = false,
+    counterChoice  = "Eye Catching",
+    counterRange   = 10,
+    counterHold    = 0.1,
+}
+
+local Window     = Non:CreateWindow({ Title = "JJS Script", Folder = "JJSScript", Theme = "Dark" })
+local Main       = Window:Section({ Title = "Main" })
+local BlockTab   = Main:Tab({ Title = "Auto Block",   Icon = "shield" })
+local CounterTab = Main:Tab({ Title = "Auto Counter", Icon = "zap" })
+
+BlockTab:Toggle({ Title = "Auto Block",  Flag = "ab_enabled", Callback = function(v) state.blockEnabled = v end })
+BlockTab:Toggle({ Title = "Block Melee", Flag = "ab_melee", Default = true, Callback = function(v) state.blockMelee = v end })
+BlockTab:Toggle({ Title = "Block Dash",  Flag = "ab_dash",  Default = true, Callback = function(v) state.blockDash  = v end })
+BlockTab:Slider({ Title = "Range",         Flag = "ab_range", Min = 1, Max = 50,  Default = 8,   Callback = function(v) state.blockRange = v end })
+BlockTab:Slider({ Title = "Hold Duration", Flag = "ab_hold",  Min = 0.05, Max = 1.0, Default = 0.4, Rounding = 2, Callback = function(v) state.blockHold = v end })
+
+CounterTab:Toggle({ Title = "Auto Counter", Flag = "ac_enabled", Callback = function(v) state.counterEnabled = v end })
+CounterTab:Dropdown({
+    Title    = "Counter",
+    Flag     = "ac_counter",
+    Options  = { "Eye Catching", "Manji Kick", "Head Splitter" },
+    Callback = function(v) state.counterChoice = v end,
+})
+CounterTab:Slider({ Title = "Range",         Flag = "ac_range", Min = 1, Max = 50,  Default = 10,  Callback = function(v) state.counterRange = v end })
+CounterTab:Slider({ Title = "Hold Duration", Flag = "ac_hold",  Min = 0.05, Max = 1.0, Default = 0.1, Rounding = 2, Callback = function(v) state.counterHold = v end })
 
 task.spawn(function()
     while true do
         task.wait(0.05)
 
-        if not UI.GetValue("ab_enabled") then
-            if isHeld then pcall(keyrelease,0x46); isHeld=false end
+        if not state.blockEnabled and not state.counterEnabled then
+            if isHeld then pcall(keyrelease, 0x46); isHeld = false end
             continue
         end
 
         if not isrbxactive() then
-            if isHeld then pcall(keyrelease,0x46); isHeld=false end
+            if isHeld then pcall(keyrelease, 0x46); isHeld = false end
             continue
         end
 
         local BLOCK_KEY  = 0x46
-        local blockMelee = UI.GetValue("ab_melee")
-        local blockDash  = UI.GetValue("ab_dash")
-        local range      = UI.GetValue("ab_range")
-        local hold       = UI.GetValue("ab_hold")
-        local maxScan    = range + 5
+        local blockRange = state.blockRange
+        local blockHold  = state.blockHold
+        local cRange     = state.counterRange
+        local maxScan    = math.max(blockRange, cRange) + 5
 
         local char = CharactersFolder:FindFirstChild(LocalPlayer.Name)
         if char ~= lastChar then
-            if isHeld then pcall(keyrelease,BLOCK_KEY); isHeld=false end
-            blockEnd=0; ActiveThreats={}; lastChar=char
+            if isHeld then pcall(keyrelease, BLOCK_KEY); isHeld = false end
+            blockEnd = 0; ActiveThreats = {}; lastChar = char
         end
         if not char then continue end
 
@@ -187,84 +222,101 @@ task.spawn(function()
         local stunVal = info and info:FindFirstChild("Stun")
         local stunned = stunVal ~= nil and stunVal.Value == true
 
-        local detected={}
-        local bSrc,dSrc,bId,dId
+        local detected      = {}
+        local bSrc, dSrc, bId, dId
+        local counterThreat = false
 
-        for _,enemy in ipairs(CharactersFolder:GetChildren()) do
-            if enemy.Name==LocalPlayer.Name then continue end
-            local eRoot=getRoot(enemy)
+        for _, enemy in ipairs(CharactersFolder:GetChildren()) do
+            if enemy.Name == LocalPlayer.Name then continue end
+            local eRoot = getRoot(enemy)
             if not eRoot then continue end
-            local diff=eRoot.Position-localRoot.Position
-            local dist=Vector3.new(diff.X,0,diff.Z).Magnitude
-            if dist>maxScan then continue end
+            local diff = eRoot.Position - localRoot.Position
+            local dist = Vector3.new(diff.X, 0, diff.Z).Magnitude
+            if dist > maxScan then continue end
             if not enemy:FindFirstChild("Humanoid") then continue end
 
-            local bid,did
-            local hum=enemy:FindFirstChildWhichIsA("Humanoid")
-            local anim=hum and hum:FindFirstChild("Animator")
-            local addr=anim and tonumber(anim.Address)
-            if addr then bid,did=scanMem(addr) end
-            if not bid and not did then bid,did=scanAPI(enemy) end
+            local bid, did
+            local hum  = enemy:FindFirstChildWhichIsA("Humanoid")
+            local anim = hum and hum:FindFirstChild("Animator")
+            local addr = anim and tonumber(anim.Address)
+            if addr then bid, did = scanMem(addr) end
+            if not bid and not did then bid, did = scanAPI(enemy) end
 
-            if blockMelee and bid and dist<=range and isFacing(localRoot,eRoot) then
-                bSrc=enemy; bId=bid
-                detected[enemy.Name.."_"..bid]=true
+            if bid and dist <= blockRange and isFacing(localRoot, eRoot) then
+                if state.blockMelee then
+                    bSrc = enemy; bId = bid
+                    detected[enemy.Name.."_"..bid] = true
+                end
+                if dist <= cRange then counterThreat = true end
             end
-            if blockDash and did and dist<=range and isFacing(localRoot,eRoot) then
-                dSrc=enemy; dId=did
-                detected[enemy.Name.."_"..did]=true
+            if did and dist <= blockRange and isFacing(localRoot, eRoot) then
+                if state.blockDash then
+                    dSrc = enemy; dId = did
+                    detected[enemy.Name.."_"..did] = true
+                end
+                if dist <= cRange then counterThreat = true end
             end
         end
 
-        local src   = dSrc or bSrc
-        local detId = dId  or bId
-        local dash  = dSrc ~= nil
-
-        if src and detId then
-            local key=src.Name.."_"..detId
-            if not ActiveThreats[key] then
-                ActiveThreats[key]={
-                    endTime=tick()+hold,
-                    pressAt=tick(),
-                    dash=dash,
-                }
+        if state.counterEnabled and counterThreat and not stunned and tick() > counterCooldown then
+            local key = COUNTERS[state.counterChoice]
+            if key then
+                pcall(keypress, key)
+                task.wait(state.counterHold)
+                pcall(keyrelease, key)
+                counterCooldown = tick() + 0.5
             end
         end
 
-        local shouldHold=false
-        for key,data in pairs(ActiveThreats) do
-            local seen=detected[key]
-            local canFire=tick()>=data.pressAt
-            if data.dash then
-                if seen and canFire then
-                    shouldHold=true
-                    blockEnd=math.max(blockEnd,tick()+hold)
-                elseif not seen then
-                    ActiveThreats[key]=nil
-                end
-            else
-                if tick()>=data.endTime then data.expired=true end
-                if data.expired and not seen then
-                    ActiveThreats[key]=nil
-                elseif not data.expired and canFire then
-                    shouldHold=true
-                    blockEnd=math.max(blockEnd,data.endTime)
-                end
-            end
-        end
+        if state.blockEnabled then
+            local src   = dSrc or bSrc
+            local detId = dId  or bId
+            local dash  = dSrc ~= nil
 
-        if not stunned then
-            if shouldHold then
-                if not isHeld then
-                    isHeld=true
-                    local alreadyBlocking=info ~= nil and info:FindFirstChild("Block") ~= nil
-                    if not alreadyBlocking then pcall(keypress,BLOCK_KEY) end
+            if src and detId then
+                local key = src.Name.."_"..detId
+                if not ActiveThreats[key] then
+                    ActiveThreats[key] = { endTime = tick()+blockHold, pressAt = tick(), dash = dash }
                 end
-            elseif isHeld and tick()>=blockEnd then
-                pcall(keyrelease,BLOCK_KEY)
-                isHeld=false
             end
+
+            local shouldHold = false
+            for key, data in pairs(ActiveThreats) do
+                local seen    = detected[key]
+                local canFire = tick() >= data.pressAt
+                if data.dash then
+                    if seen and canFire then
+                        shouldHold = true
+                        blockEnd = math.max(blockEnd, tick()+blockHold)
+                    elseif not seen then
+                        ActiveThreats[key] = nil
+                    end
+                else
+                    if tick() >= data.endTime then data.expired = true end
+                    if data.expired and not seen then
+                        ActiveThreats[key] = nil
+                    elseif not data.expired and canFire then
+                        shouldHold = true
+                        blockEnd = math.max(blockEnd, data.endTime)
+                    end
+                end
+            end
+
+            if not stunned then
+                if shouldHold then
+                    if not isHeld then
+                        isHeld = true
+                        local alreadyBlocking = info ~= nil and info:FindFirstChild("Block") ~= nil
+                        if not alreadyBlocking then pcall(keypress, BLOCK_KEY) end
+                    end
+                elseif isHeld and tick() >= blockEnd then
+                    pcall(keyrelease, BLOCK_KEY)
+                    isHeld = false
+                end
+            end
+        else
+            if isHeld then pcall(keyrelease, 0x46); isHeld = false end
+            ActiveThreats = {}
         end
     end
 end)
-print("[AutoBlock] Running")
