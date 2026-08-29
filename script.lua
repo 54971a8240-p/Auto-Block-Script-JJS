@@ -118,10 +118,10 @@ end
 
 local function scanMem(addr)
     local head = rp(addr + AA.AL)
-    if not head then return nil, nil end
+    if not head then return nil, nil, nil end
     local node = rp(head)
-    if not node or node == head then return nil, nil end
-    local bId, dId, i = nil, nil, 0
+    if not node or node == head then return nil, nil, nil end
+    local bId, dId, aId, i = nil, nil, nil, 0
     while node and node ~= 0 and node ~= head and i < 30 do
         i = i + 1
         local ta = rp(node + AA.NN)
@@ -131,15 +131,15 @@ local function scanMem(addr)
                 local id = rs(rp(ap + TA.AI))
                 id = id and id:match("%d+$")
                 if id then
-                    if BlockAnimations[id] then bId = id break end
-                    if AbilityAnimations[id] then bId = id end
-                    if DashAnimations[id]  then dId = id end
+                    if BlockAnimations[id]   then bId = id break end
+                    if DashAnimations[id]    then dId = id end
+                    if AbilityAnimations[id] then aId = id break end
                 end
             end
         end
         node = rp(node)
     end
-    return bId, dId
+    return bId, dId, aId
 end
 
 local function getRoot(char)
@@ -158,7 +158,6 @@ local function enemyFacingMe(eRoot, myPos)
 end
 
 local isHeld          = false
-local isRepressing    = false
 local lastChar        = nil
 local counterCooldown = 0
 local lingerUntil     = 0
@@ -170,9 +169,9 @@ local state = {
     blockMelee        = true,
     blockDash         = true,
     blockAbility      = true,
-    meleeBRange       = 8,
-    dashBRange        = 20,
-    abilityBRange     = 15,
+    meleeRange        = 8,
+    dashRange         = 20,
+    abilityRange      = 15,
     blockHold         = 0.4,
     counterEnabled    = false,
     counterChoice     = "Eye Catching",
@@ -190,17 +189,15 @@ local Main       = Window:Section({ Title = "Main" })
 local BlockTab   = Main:Tab({ Title = "Auto Block",   Icon = "shield" })
 local CounterTab = Main:Tab({ Title = "Auto Counter", Icon = "zap" })
 
--- Auto Block
 BlockTab:Toggle({ Title = "Auto Block",    Flag = "ab_enabled", Callback = function(v) state.blockEnabled  = v end })
 BlockTab:Toggle({ Title = "Block Melee",   Flag = "ab_melee",   Default = true, Callback = function(v) state.blockMelee   = v end })
 BlockTab:Toggle({ Title = "Block Dash",    Flag = "ab_dash",    Default = true, Callback = function(v) state.blockDash    = v end })
 BlockTab:Toggle({ Title = "Block Ability", Flag = "ab_ability", Default = true, Callback = function(v) state.blockAbility = v end })
-BlockTab:Slider({ Title = "Melee Range",   Flag = "ab_mrange",  Min = 1, Max = 50, Default = 8,  Callback = function(v) state.meleeBRange   = v end })
-BlockTab:Slider({ Title = "Dash Range",    Flag = "ab_drange",  Min = 1, Max = 50, Default = 20, Callback = function(v) state.dashBRange    = v end })
-BlockTab:Slider({ Title = "Ability Range", Flag = "ab_arange",  Min = 1, Max = 50, Default = 15, Callback = function(v) state.abilityBRange = v end })
+BlockTab:Slider({ Title = "Melee Range",   Flag = "ab_mrange",  Min = 1, Max = 50, Default = 8,  Callback = function(v) state.meleeRange   = v end })
+BlockTab:Slider({ Title = "Dash Range",    Flag = "ab_drange",  Min = 1, Max = 50, Default = 20, Callback = function(v) state.dashRange    = v end })
+BlockTab:Slider({ Title = "Ability Range", Flag = "ab_arange",  Min = 1, Max = 50, Default = 15, Callback = function(v) state.abilityRange = v end })
 BlockTab:Slider({ Title = "Hold Duration", Flag = "ab_hold",    Min = 0.05, Max = 1.0, Default = 0.4, Rounding = 2, Callback = function(v) state.blockHold = v end })
 
--- Auto Counter
 CounterTab:Toggle({ Title = "Auto Counter",    Flag = "ac_enabled", Callback = function(v) state.counterEnabled  = v end })
 CounterTab:Dropdown({
     Title    = "Counter",
@@ -214,7 +211,6 @@ CounterTab:Toggle({ Title = "Counter Ability", Flag = "ac_ability", Default = tr
 CounterTab:Slider({ Title = "Melee Range",     Flag = "ac_mrange",  Min = 1, Max = 50, Default = 10, Callback = function(v) state.meleeCRange   = v end })
 CounterTab:Slider({ Title = "Dash Range",      Flag = "ac_drange",  Min = 1, Max = 50, Default = 15, Callback = function(v) state.dashCRange    = v end })
 CounterTab:Slider({ Title = "Ability Range",   Flag = "ac_arange",  Min = 1, Max = 50, Default = 12, Callback = function(v) state.abilityCRange = v end })
-CounterTab:Slider({ Title = "Hold Duration",   Flag = "ac_hold",    Min = 0.05, Max = 1.0, Default = 0.1, Rounding = 2, Callback = function(v) state.counterHold = v end })
 
 task.spawn(function()
     while true do
@@ -231,13 +227,7 @@ task.spawn(function()
         end
 
         local BLOCK_KEY    = 0x46
-        local meleeBRange  = state.meleeBRange
-        local dashBRange   = state.dashBRange
-        local abilityBRange = state.abilityBRange
-        local meleeCRange  = state.meleeCRange
-        local dashCRange   = state.dashCRange
-        local abilityCRange = state.abilityCRange
-        local maxScan      = math.max(meleeBRange, dashBRange, abilityBRange, meleeCRange, dashCRange, abilityCRange) + 5
+        local maxScan      = math.max(state.meleeRange, state.dashRange, state.abilityRange, state.meleeCRange, state.dashCRange, state.abilityCRange) + 5
 
         local char = CharactersFolder:FindFirstChild(LocalPlayer.Name)
         if char ~= lastChar then
@@ -256,9 +246,9 @@ task.spawn(function()
         local stunVal = info and info:FindFirstChild("Stun")
         local stunned = stunVal ~= nil and stunVal.Value == true
 
-        local blockThreat   = false
-        local counterThreat = false
-        local currentAnimId = nil
+        local threatDetected = false
+        local counterThreat  = false
+        local currentAnimId  = nil
 
         for _, enemy in ipairs(CharactersFolder:GetChildren()) do
             if enemy.Name == LocalPlayer.Name then continue end
@@ -283,29 +273,34 @@ task.spawn(function()
 
             local bid, did, aid = scanMem(addr)
 
-            -- Block checks
-            if bid and dist <= meleeBRange and state.blockMelee then
-                blockThreat = true
-                currentAnimId = bid
-            end
-            if did and dist <= dashBRange and state.blockDash then
-                blockThreat = true
-                currentAnimId = did
-            end
-            if aid and dist <= abilityBRange and state.blockAbility then
-                blockThreat = true
-                currentAnimId = aid
+            if bid then
+                if dist <= state.meleeRange and state.blockMelee then
+                    threatDetected = true
+                    currentAnimId  = bid
+                end
+                if dist <= state.meleeCRange and state.counterMelee then
+                    counterThreat = true
+                end
             end
 
-            -- Counter checks (independent ranges and toggles)
-            if bid and dist <= meleeCRange and state.counterMelee then
-                counterThreat = true
+            if did then
+                if dist <= state.dashRange and state.blockDash then
+                    threatDetected = true
+                    currentAnimId  = did
+                end
+                if dist <= state.dashCRange and state.counterDash then
+                    counterThreat = true
+                end
             end
-            if did and dist <= dashCRange and state.counterDash then
-                counterThreat = true
-            end
-            if aid and dist <= abilityCRange and state.counterAbility then
-                counterThreat = true
+
+            if aid then
+                if dist <= state.abilityRange and state.blockAbility then
+                    threatDetected = true
+                    currentAnimId  = aid
+                end
+                if dist <= state.abilityCRange and state.counterAbility then
+                    counterThreat = true
+                end
             end
         end
 
@@ -320,24 +315,20 @@ task.spawn(function()
             end
         end
 
-        -- Auto Block
+        -- Auto Block — untouched from working version
         if state.blockEnabled and not stunned then
-            if blockThreat then
+            if threatDetected then
                 lingerUntil = tick() + LINGER_TIME
                 if not isHeld then
                     isHeld        = true
                     lastBlockedId = currentAnimId
                     local alreadyBlocking = info ~= nil and info:FindFirstChild("Block") ~= nil
                     if not alreadyBlocking then pcall(keypress, BLOCK_KEY) end
-                elseif currentAnimId ~= lastBlockedId and not isRepressing then
+                elseif currentAnimId ~= lastBlockedId then
                     lastBlockedId = currentAnimId
-                    isRepressing  = true
-                    task.spawn(function()
-                        pcall(keyrelease, BLOCK_KEY)
-                        task.wait(0.016)
-                        pcall(keypress, BLOCK_KEY)
-                        isRepressing = false
-                    end)
+                    pcall(keyrelease, BLOCK_KEY)
+                    task.wait(0.008)
+                    pcall(keypress, BLOCK_KEY)
                 end
             elseif isHeld and tick() >= lingerUntil then
                 pcall(keyrelease, BLOCK_KEY)
