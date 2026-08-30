@@ -14,6 +14,7 @@ local COUNTERS = {
     ["Eye Catching"]  = 0x33,
     ["Manji Kick"]    = 0x34,
     ["Head Splitter"] = 0x34,
+    ["Door Guard"]    = 0x52,
 }
 
 local BlockAnimations   = {}
@@ -202,7 +203,7 @@ CounterTab:Toggle({ Title = "Auto Counter",    Flag = "ac_enabled", Callback = f
 CounterTab:Dropdown({
     Title    = "Counter",
     Flag     = "ac_counter",
-    Options  = { "Eye Catching", "Manji Kick", "Head Splitter" },
+    Options  = { "Eye Catching", "Manji Kick", "Head Splitter", "Door Guard" },
     Callback = function(v) state.counterChoice = v end,
 })
 CounterTab:Toggle({ Title = "Counter Melee",   Flag = "ac_melee",   Default = true, Callback = function(v) state.counterMelee   = v end })
