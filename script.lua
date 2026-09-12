@@ -96,7 +96,7 @@ do
 end
 
 local IA = { CD = 0x18, CN = 0x08 }
-local AA = { NN = 0x10, AL = 0xB50 }
+local AA = { NN = 0x10, AL = 0xAB0 }
 local TA = { AN = 0xB8, AI = 0xC0 }
 
 local function rp(a)
